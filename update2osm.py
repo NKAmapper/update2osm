@@ -22,7 +22,7 @@ import time
 from xml.etree import ElementTree
 
 
-version = "0.2.0"
+version = "0.3.0"
 
 header = {"User-Agent": "osm-no/update_ref/" + version}
 
@@ -64,6 +64,8 @@ def osm_line (value):
 	value = value.encode('utf-8')
 	file_out.write (value)
 
+
+# Generate node, way or relation
 
 def generate_osm_element (element):
 
@@ -166,7 +168,7 @@ if __name__ == '__main__':
 			if colon >= 0:
 				key = key[0:colon + 1]  # Keep prefix only, will match all keys with equal prefix (e.g. "fuel:xxx")
 
-			if key != key.upper():
+			if (key != key.upper()) and (key != "ref:"):
 				input_keys.append(key)
 
 		input_elements.append(entry)
@@ -186,7 +188,7 @@ if __name__ == '__main__':
 	# Get all existing object from Overpass
 
 	message ("Loading from Overpass... ")
-	query = '[out:json][timeout:60];(area[admin_level=2][name=Norge];)->.a;(nwr["%s"](area.a););(._;<;>;);out meta;' % ref_key
+	query = '[out:json][timeout:60];(area[admin_level=2][name=Norge];)->.a;(nwr["%s"](area.a););(._;<;);(._;>;);out meta;' % ref_key
 	request = urllib2.Request('https://overpass-api.de/api/interpreter?data=' + urllib.quote(query), headers=header)
 	file = urllib2.urlopen(request)
 	osm_data = json.load(file)
@@ -225,7 +227,7 @@ if __name__ == '__main__':
 			log_file.write ("\n%s: %s\n" % (ref_key, input_element['tags'][ref_key]))
 
 			for osm_element in osm_data['elements']:
-				if ("tags" in osm_element) and (ref_key in osm_element['tags']) and (osm_element['tags'][ref_key] ==  input_element['tags'][ref_key]):
+				if ("tags" in osm_element) and (ref_key in osm_element['tags']) and (osm_element['tags'][ref_key] == input_element['tags'][ref_key]):
 
 					# Loop tags of existing osm element and replace keys/values, or delete if within tag scope of tags in input file
 
@@ -238,21 +240,32 @@ if __name__ == '__main__':
 						else:
 							prefix_key = key
 
-						if key in input_element['tags']:  # New tag value for existing key
-							if (value != input_element['tags'][key]):
-								new_tags[key] = input_element['tags'][key]
-								modified = True
-								log_file.write ("    Replaced: %s='%s' with '%s'\n" % (key.encode("utf-8"), value.encode("utf-8"),\
-																					input_element['tags'][key].encode("utf-8")))
+						# New tag value for existing key
+						# Keep https url's
 
-						elif prefix_key in input_keys:  # Tag not found, and to be deleted if within scope of input tags
+						if key in input_element['tags']:
+							if value != input_element['tags'][key]:
+								if not ((key in ['website', 'url', 'contact:website']) and\
+										((value == input_element['tags'][key].replace("http", "https")) or\
+										(value == input_element['tags'][key].replace("http", "https") + "/"))):
+									new_tags[key] = input_element['tags'][key]
+									modified = True
+									log_file.write ("    Replaced: %s='%s' with '%s'\n" % (key.encode("utf-8"), value.encode("utf-8"),\
+																						input_element['tags'][key].encode("utf-8")))
+								else:
+									log_file.write ("    Keep:     %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
+
+						# Tag not found, and to be deleted if within scope of input tags
+						# Keep 4 tags for YX/7-Eleven stations and 2 tags for schools
+
+						elif prefix_key in input_keys:
 							if not(("brand" in input_element['tags']) and (input_element['tags']['brand'] == "YX 7-Eleven") and\
-									(key in ['ref:7eleven', 'ref:yx', 'phone', 'email'])):  # Keep 4 tags for YX/7-Eleven stations
+									(key in ['phone', 'email'])):
 								del new_tags[key]
 								modified = True
 								log_file.write ("    Deleted:  %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
 							else:
-								log_file.write ("    Keep:     %s='%s'  (YX/7-Eleven)\n" % (key.encode("utf-8"), value.encode("utf-8")))
+								log_file.write ("    Keep:     %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
 
 					# Add new tags to osm element
 
@@ -294,7 +307,7 @@ if __name__ == '__main__':
 
 		if ("tags" in osm_element) and (ref_key in osm_element['tags']) and not("match" in osm_element) and not("modify" in osm_element):
 			osm_element['tags']['NOT_FOUND'] = "yes"
-			osm_element['modify'] = True
+#			osm_element['modify'] = True
 			not_found += 1
 			log_file.write ("\nOBJECT IN OSM NOT FOUND IN INPUT FILE:\n")
 			for key, value in osm_element['tags'].iteritems():
