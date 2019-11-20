@@ -22,9 +22,9 @@ import time
 from xml.etree import ElementTree
 
 
-version = "0.3.0"
+version = "0.4.0"
 
-header = {"User-Agent": "osm-no/update_ref/" + version}
+header = {"User-Agent": "osm-no/update2osm"}
 
 
 escape_characters = {
@@ -189,7 +189,7 @@ if __name__ == '__main__':
 
 	message ("Loading from Overpass... ")
 	query = '[out:json][timeout:60];(area[admin_level=2][name=Norge];)->.a;(nwr["%s"](area.a););(._;<;);(._;>;);out meta;' % ref_key
-	request = urllib2.Request('https://overpass-api.de/api/interpreter?data=' + urllib.quote(query), headers=header)
+	request = urllib2.Request('https://overpass-api.de/api/interpreter?data=' + urllib.quote(query.encode('utf-8')), headers=header)
 	file = urllib2.urlopen(request)
 	osm_data = json.load(file)
 	file.close()
@@ -224,10 +224,13 @@ if __name__ == '__main__':
 			# Loop osm data until matching element is found
 
 			modified = False
-			log_file.write ("\n%s: %s\n" % (ref_key, input_element['tags'][ref_key]))
+			log_file.write ("\n%s=%s\n" % (ref_key.encode("utf-8"), input_element['tags'][ref_key].encode("utf-8")))
 
 			for osm_element in osm_data['elements']:
 				if ("tags" in osm_element) and (ref_key in osm_element['tags']) and (osm_element['tags'][ref_key] == input_element['tags'][ref_key]):
+
+					if ref_key == "ref:toll":
+						log_file.write ("  Match with OSM id: %i\n" % osm_element['id'])
 
 					# Loop tags of existing osm element and replace keys/values, or delete if within tag scope of tags in input file
 
@@ -247,7 +250,8 @@ if __name__ == '__main__':
 							if value != input_element['tags'][key]:
 								if not ((key in ['website', 'url', 'contact:website']) and\
 										((value == input_element['tags'][key].replace("http", "https")) or\
-										(value == input_element['tags'][key].replace("http", "https") + "/"))):
+										(value == input_element['tags'][key].replace("http", "https") + "/")) or\
+										(ref_key == "ref:toll" and key == "name")):
 									new_tags[key] = input_element['tags'][key]
 									modified = True
 									log_file.write ("    Replaced: %s='%s' with '%s'\n" % (key.encode("utf-8"), value.encode("utf-8"),\
@@ -281,7 +285,9 @@ if __name__ == '__main__':
 						osm_element['modify'] = True
 						updated += 1
 					found = True
-					break
+
+					if ref_key != "ref:toll":  # Several occurances of ref:toll
+						break
 
 		else:
 			log_file.write ("\nNO %s KEY\n" % ref_key.upper())  # Ref: not found in input file for this element
@@ -296,7 +302,7 @@ if __name__ == '__main__':
 			added += 1
 			osm_data['elements'].append(input_element)
 
-			log_file.write ("    ADDED NEW OBJECT TO OUPUT FILE:\n")
+			log_file.write ("  ADDED NEW OBJECT TO OUPUT FILE:\n")
 			for key, value in input_element['tags'].iteritems():
 				log_file.write ("    %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
 
@@ -307,7 +313,7 @@ if __name__ == '__main__':
 
 		if ("tags" in osm_element) and (ref_key in osm_element['tags']) and not("match" in osm_element) and not("modify" in osm_element):
 			osm_element['tags']['NOT_FOUND'] = "yes"
-#			osm_element['modify'] = True
+			osm_element['modify'] = True
 			not_found += 1
 			log_file.write ("\nOBJECT IN OSM NOT FOUND IN INPUT FILE:\n")
 			for key, value in osm_element['tags'].iteritems():
@@ -318,7 +324,7 @@ if __name__ == '__main__':
 
 	file_out = open(out_filename, "w")
 	file_out.write ('<?xml version="1.0" encoding="UTF-8"?>\n')
-	file_out.write ('<osm version="0.6" generator="update_ref v%s" upload="false">\n' % version)
+	file_out.write ('<osm version="0.6" generator="update2osm v%s" upload="false">\n' % version)
 
 	for element in osm_data['elements']:
 		generate_osm_element (element)
