@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf8
 
 # update2osm
@@ -15,14 +15,13 @@
 
 import json
 import sys
-import urllib
-import urllib2
+import urllib.request, urllib.parse
 import copy
 import time
 from xml.etree import ElementTree
 
 
-version = "0.4.0"
+version = "1.0.0"
 
 header = {"User-Agent": "osm-no/update2osm"}
 
@@ -40,7 +39,7 @@ escape_characters = {
 def escape (value):
 
 	value = value.replace("&", "&amp;")
-	for change, to in escape_characters.iteritems():
+	for change, to in escape_characters.items():
 		value = value.replace(change, to)
 	return value
 
@@ -51,8 +50,8 @@ def osm_tag (key, value):
 
 	value = value.strip()
 	if value:
-		value = escape(value).encode('utf-8')
-		key = escape(key).encode('utf-8')
+		value = escape(value)
+		key = escape(key)
 		line = "    <tag k='%s' v='%s' />\n" % (key, value)
 		file_out.write (line)
 
@@ -61,7 +60,6 @@ def osm_tag (key, value):
 
 def osm_line (value):
 
-	value = value.encode('utf-8')
 	file_out.write (value)
 
 
@@ -79,7 +77,7 @@ def generate_osm_element (element):
 		else:
 			action_text = ""
 
-		line = u"  <%s id='%i' %stimestamp='%s' uid='%i' user='%s' visible='true' version='%i' changeset='%i'"\
+		line = "  <%s id='%i' %stimestamp='%s' uid='%i' user='%s' visible='true' version='%i' changeset='%i'"\
 				% (element['type'], element['id'], action_text, element['timestamp'], element['uid'], escape(element['user']),\
 				element['version'], element['changeset'])
 
@@ -101,7 +99,7 @@ def generate_osm_element (element):
 			osm_line (line)
 
 	if "tags" in element:
-		for key, value in element['tags'].iteritems():
+		for key, value in element['tags'].items():
 			osm_tag (key, value)
 
 	line = "  </%s>\n" % element['type']
@@ -134,7 +132,7 @@ if __name__ == '__main__':
 		out_filename = input_filename + "_update"
 
 	today_date = time.strftime("%Y-%m-%d", time.localtime())
-	log_filename = input_filename.replace(".osm", "") + "_update_log_" + today_date +  ".txt"
+	log_filename = input_filename.replace(".osm", "") + "_update_log.txt"
 
 
 	# First loop all input nodes to copy data and produce tag inventory
@@ -189,8 +187,8 @@ if __name__ == '__main__':
 
 	message ("Loading from Overpass... ")
 	query = '[out:json][timeout:60];(area[admin_level=2][name=Norge];)->.a;(nwr["%s"](area.a););(._;<;);(._;>;);out meta;' % ref_key
-	request = urllib2.Request('https://overpass-api.de/api/interpreter?data=' + urllib.quote(query.encode('utf-8')), headers=header)
-	file = urllib2.urlopen(request)
+	request = urllib.request.Request('https://overpass-api.de/api/interpreter?data=' + urllib.parse.quote(query), headers=header)
+	file = urllib.request.urlopen(request)
 	osm_data = json.load(file)
 	file.close()
 
@@ -224,7 +222,7 @@ if __name__ == '__main__':
 			# Loop osm data until matching element is found
 
 			modified = False
-			log_file.write ("\n%s=%s\n" % (ref_key.encode("utf-8"), input_element['tags'][ref_key].encode("utf-8")))
+			log_file.write ("\n%s=%s\n" % (ref_key, input_element['tags'][ref_key]))
 
 			for osm_element in osm_data['elements']:
 				if ("tags" in osm_element) and (ref_key in osm_element['tags']) and (osm_element['tags'][ref_key] == input_element['tags'][ref_key]):
@@ -235,7 +233,7 @@ if __name__ == '__main__':
 					# Loop tags of existing osm element and replace keys/values, or delete if within tag scope of tags in input file
 
 					new_tags = copy.deepcopy(osm_element['tags'])
-					for key, value in osm_element['tags'].iteritems():
+					for key, value in osm_element['tags'].items():
 
 						colon = key.find(':')
 						if colon >= 0:
@@ -254,10 +252,9 @@ if __name__ == '__main__':
 										(ref_key == "ref:toll" and key == "name")):
 									new_tags[key] = input_element['tags'][key]
 									modified = True
-									log_file.write ("    Replaced: %s='%s' with '%s'\n" % (key.encode("utf-8"), value.encode("utf-8"),\
-																						input_element['tags'][key].encode("utf-8")))
+									log_file.write ("    Replaced: %s='%s' with '%s'\n" % (key, value, input_element['tags'][key]))
 								else:
-									log_file.write ("    Keep:     %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
+									log_file.write ("    Keep:     %s='%s'\n" % (key, value))
 
 						# Tag not found, and to be deleted if within scope of input tags
 						# Keep 4 tags for YX/7-Eleven stations and 2 tags for schools
@@ -267,17 +264,17 @@ if __name__ == '__main__':
 									(key in ['phone', 'email'])):
 								del new_tags[key]
 								modified = True
-								log_file.write ("    Deleted:  %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
+								log_file.write ("    Deleted:  %s='%s'\n" % (key, value))
 							else:
-								log_file.write ("    Keep:     %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
+								log_file.write ("    Keep:     %s='%s'\n" % (key, value))
 
 					# Add new tags to osm element
 
-					for key, value in input_element['tags'].iteritems():
+					for key, value in input_element['tags'].items():
 						if not(key in new_tags) and (key != key.upper()):
 							new_tags[key] = value
 							modified = True
-							log_file.write ("    Added:    %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
+							log_file.write ("    Added:    %s='%s'\n" % (key, value))
 
 					osm_element['match'] = True
 					osm_element['tags'] = new_tags
@@ -303,8 +300,8 @@ if __name__ == '__main__':
 			osm_data['elements'].append(input_element)
 
 			log_file.write ("  ADDED NEW OBJECT TO OUPUT FILE:\n")
-			for key, value in input_element['tags'].iteritems():
-				log_file.write ("    %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
+			for key, value in input_element['tags'].items():
+				log_file.write ("    %s='%s'\n" % (key, value))
 
 
 	# Tag elements in osm not found in input file
@@ -316,8 +313,8 @@ if __name__ == '__main__':
 			osm_element['modify'] = True
 			not_found += 1
 			log_file.write ("\nOBJECT IN OSM NOT FOUND IN INPUT FILE:\n")
-			for key, value in osm_element['tags'].iteritems():
-				log_file.write ("    %s='%s'\n" % (key.encode("utf-8"), value.encode("utf-8")))
+			for key, value in osm_element['tags'].items():
+				log_file.write ("    %s='%s'\n" % (key, value))
 
 
 	# Produce file
