@@ -21,7 +21,7 @@ import time
 from xml.etree import ElementTree
 
 
-version = "1.0.0"
+version = "1.0.1"
 
 header = {"User-Agent": "osm-no/update2osm"}
 
@@ -248,7 +248,9 @@ if __name__ == '__main__':
 							if value != input_element['tags'][key]:
 								if not ((key in ['website', 'url', 'contact:website']) and\
 										((value == input_element['tags'][key].replace("http", "https")) or\
-										(value == input_element['tags'][key].replace("http", "https") + "/")) or\
+										(value == input_element['tags'][key].replace("http", "https") + "/") or\
+										(value == input_element['tags'][key].replace("http://", "https://www.")) or\
+										(value == input_element['tags'][key].replace("http://", "https://www.") + "/")) or\
 										(ref_key == "ref:toll" and key == "name")):
 									new_tags[key] = input_element['tags'][key]
 									modified = True
