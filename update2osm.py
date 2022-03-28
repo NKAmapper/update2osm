@@ -7,9 +7,10 @@
 # Deletes tags from OSM object which are not present in input file (only if tag is part of the input dataset).
 # "Equal prefix rule": If e.g. "fuel:diesel" is part of input dataset, then all "fuel:" tags must be part of the input dataset to survive.
 
-# Usage: python update_ref.py [input_filename.osm]
+# Usage: python update_ref.py [input_filename.osm] [country]
 # Input file name must end with .osm
 # Output file name is appended with "_update.osm"
+# Default country is "Norge" - optional country argument must match name=* in OSM country relation
 # Detailed log file: "_update_log.txt" + date
 
 
@@ -18,126 +19,39 @@ import sys
 import urllib.request, urllib.parse
 import copy
 import time
-from xml.etree import ElementTree
+from xml.etree import ElementTree as ET
 
 
-version = "1.0.1"
+version = "1.1.0"
 
 header = {"User-Agent": "osm-no/update2osm"}
 
-
-escape_characters = {
-	'"': "&quot;",
-	"'": "&apos;",
-	"<": "&lt;",
-	">": "&gt;"
-}
+country = "Norge"  # Used in Overpass query; must match country relation name in OSM ("Norge", "Sverige")
 
 
-# Escape string for osm xml file
-
-def escape (value):
-
-	value = value.replace("&", "&amp;")
-	for change, to in escape_characters.items():
-		value = value.replace(change, to)
-	return value
-
-
-# Generate one osm tag
-
-def osm_tag (key, value):
-
-	value = value.strip()
-	if value:
-		value = escape(value)
-		key = escape(key)
-		line = "    <tag k='%s' v='%s' />\n" % (key, value)
-		file_out.write (line)
-
-
-# Generate one osm line
-
-def osm_line (value):
-
-	file_out.write (value)
-
-
-# Generate node, way or relation
-
-def generate_osm_element (element):
-
-	if element['id'] < 0:
-		line = "  <node id='%i' action='modify' visible='true' lat='%f' lon='%f'>\n" % (element['id'], element['lat'], element['lon'])
-		osm_line (line)
-
-	else:
-		if "modify" in element:
-			action_text = "action='modify' "
-		else:
-			action_text = ""
-
-		line = "  <%s id='%i' %stimestamp='%s' uid='%i' user='%s' visible='true' version='%i' changeset='%i'"\
-				% (element['type'], element['id'], action_text, element['timestamp'], element['uid'], escape(element['user']),\
-				element['version'], element['changeset'])
-
-		if element['type'] == "node":
-			line_end = " lat='%f' lon='%f'>\n" % (element['lat'], element['lon'])
-		else:
-			line_end = ">\n"
-
-		osm_line (line + line_end)
-
-	if "nodes" in element:
-		for node in element['nodes']:
-			line = "    <nd ref='%i' />\n" % node
-			osm_line (line)
-
-	if "members" in element:
-		for member in element['members']:
-			line = "    <member type='%s' ref='%i' role='%s' />\n" % (escape(member['type']), member['ref'], member['role'])
-			osm_line (line)
-
-	if "tags" in element:
-		for key, value in element['tags'].items():
-			osm_tag (key, value)
-
-	line = "  </%s>\n" % element['type']
-	osm_line (line)
-
-
-# Output message
 
 def message (line):
+	'''
+	Output message
+	'''
 
 	sys.stdout.write (line)
 	sys.stdout.flush()
 
 
-# Main program
 
-if __name__ == '__main__':
+def load_file(input_filename):
+	'''
+	Load input file with update data.
+	'''
 
-	# Read all data into memory
-	
-	if len(sys.argv) == 2:
-		input_filename = sys.argv[1].lower()
-	else:
-		message ("Input filename.osm missing\n")
-		sys.exit()
-
-	if input_filename.find(".osm") >= 0:
-		out_filename = input_filename.replace(".osm", "") + "_update.osm"
-	else:
-		out_filename = input_filename + "_update"
-
-	today_date = time.strftime("%Y-%m-%d", time.localtime())
-	log_filename = input_filename.replace(".osm", "") + "_update_log.txt"
-
+	global ref_key, input_keys, input_elements
 
 	# First loop all input nodes to copy data and produce tag inventory
 
-	tree = ElementTree.parse(input_filename)
+	message ("Loading file ...\n")
+
+	tree = ET.parse(input_filename)
 	root = tree.getroot()
 
 	ref_key = ""
@@ -171,8 +85,8 @@ if __name__ == '__main__':
 
 		input_elements.append(entry)
 
-	message ("\nUpdating elements with '%s'\n" % ref_key)
-	message ("%i elements in input file" % len(input_elements))
+	message ("\tRef tag found: '%s'\n" % ref_key)
+	message ("\t%i elements loaded from input file '%s'" % (len(input_elements), input_filename))
 	if ref_input_count < len(input_elements):
 		message (" (%i with %s key)\n" % (ref_input_count, ref_key))
 	else:
@@ -183,10 +97,18 @@ if __name__ == '__main__':
 		sys.exit()
 
 
+
+def load_overpass():
+	'''
+	Load existing OSM data for given ref from Overpass.
+	'''
+
+	global osm_data
+
 	# Get all existing object from Overpass
 
-	message ("Loading from Overpass... ")
-	query = '[out:json][timeout:60];(area[admin_level=2][name=Norge];)->.a;(nwr["%s"](area.a););(._;<;);(._;>;);out meta;' % ref_key
+	message ("Loading from Overpass for %s ...\n" % country)
+	query = '[out:json][timeout:60];(area[admin_level=2][name=%s];)->.a;(nwr["%s"](area.a););(._;<;);(._;>;);out meta;' % (country, ref_key)
 	request = urllib.request.Request('https://overpass-api.de/api/interpreter?data=' + urllib.parse.quote(query), headers=header)
 	file = urllib.request.urlopen(request)
 	osm_data = json.load(file)
@@ -197,11 +119,21 @@ if __name__ == '__main__':
 		if ("tags" in element) and (ref_key in element['tags']):
 			ref_osm_count += 1
 
-	message ("\n%i elements in OSM with %s" % (ref_osm_count, ref_key))
+	message ("\t%i elements in OSM with %s" % (ref_osm_count, ref_key))
 	if len(osm_data['elements']) > ref_osm_count:
 		message (", + %i connected elements\n" % (len(osm_data['elements']) - ref_osm_count))
 	else:
 		message ("\n")
+
+
+
+def merge(log_filename):
+	'''
+	Merge input file with existing OSM elements based on ref tag.
+	Generate also log file with details of conflation.
+	'''
+
+	message ("Merging data ...\n")
 
 	# Loop through all elements in input file and compare with osm data
 
@@ -318,22 +250,122 @@ if __name__ == '__main__':
 			for key, value in osm_element['tags'].items():
 				log_file.write ("    %s='%s'\n" % (key, value))
 
-
-	# Produce file
-
-	file_out = open(out_filename, "w")
-	file_out.write ('<?xml version="1.0" encoding="UTF-8"?>\n')
-	file_out.write ('<osm version="0.6" generator="update2osm v%s" upload="false">\n' % version)
-
-	for element in osm_data['elements']:
-		generate_osm_element (element)
-
-	file_out.write ('</osm>\n')
-	file_out.close()
 	log_file.close()
 
-	message ("\nSummary of changes written to output file %s:\n" % out_filename)
-	message ("  Updated:  %i\n" % updated)
-	message ("  Added:    %i\n" % added)
-	message ("  No match: %i (objects in OSM with %s not found in input file)\n" % (not_found, ref_key))
-	message ("\nDetails in log file %s\n\n" % log_filename)
+	message ("\tUpdated:  %i\n" % updated)
+	message ("\tAdded:    %i\n" % added)
+	message ("\tNo match: %i (objects in OSM with %s not found in input file)\n" % (not_found, ref_key))
+	message ("\tDetails in log file '%s'\n" % log_filename)
+
+
+
+def indent_tree(elem, level=0):
+	'''
+	Insert line feeds into XLM file.
+	'''
+
+	i = "\n" + level*"  "
+	if len(elem):
+		if not elem.text or not elem.text.strip():
+			elem.text = i + "  "
+		if not elem.tail or not elem.tail.strip():
+			elem.tail = i
+		for elem in elem:
+			indent_tree(elem, level+1)
+		if not elem.tail or not elem.tail.strip():
+			elem.tail = i
+	else:
+		if level and (not elem.tail or not elem.tail.strip()):
+			elem.tail = i
+
+
+
+def save_osm_file(filename):
+	'''
+	Output merged OSM file.
+	'''
+
+	# Generate XML
+
+	message ("Saving file ...\n")
+	osm_root = ET.Element("osm", version="0.6", generator="update2osm v%s" % version, upload="false")
+
+	for element in osm_data['elements']:
+
+		if element['type'] == "node":
+			osm_element = ET.Element("node", lat=str(element['lat']), lon=str(element['lon']))
+
+		elif element['type'] == "way":
+			osm_element = ET.Element("way")
+			if "nodes" in element:
+				for node_ref in element['nodes']:
+					osm_element.append(ET.Element("nd", ref=str(node_ref)))
+
+		elif element['type'] == "relation":
+			osm_element = ET.Element("relation")
+			if "members" in element:
+				for member in element['members']:
+					osm_element.append(ET.Element("member", type=member['type'], ref=str(member['ref']), role=member['role']))
+
+		if "tags" in element:
+			for key, value in iter(element['tags'].items()):
+				osm_element.append(ET.Element("tag", k=key, v=value))
+
+		osm_element.set('id', str(element['id']))
+		osm_element.set('visible', 'true')
+
+		if "user" in element:  # Existing element
+			osm_element.set('version', str(element['version']))
+			osm_element.set('user', element['user'])
+			osm_element.set('uid', str(element['uid']))
+			osm_element.set('timestamp', element['timestamp'])
+			osm_element.set('changeset', str(element['changeset']))
+
+		if "modify" in element:
+			osm_element.set('action', 'modify')
+
+		osm_root.append(osm_element)
+		
+	# Output OSM/XML file
+
+	osm_tree = ET.ElementTree(osm_root)
+	indent_tree(osm_root)
+	osm_tree.write(filename, encoding="utf-8", method="xml", xml_declaration=True)
+
+	message ("\t%i elements saved to file '%s'\n" % (len(osm_data['elements']), out_filename))
+
+
+
+# Main program
+
+if __name__ == '__main__':
+
+	# Read all data into memory
+	
+	message ("\nupdate2osm v%s\n" % version)
+
+	if len(sys.argv) > 1:
+		input_filename = sys.argv[1].lower()
+	else:
+		message ("Input filename.osm missing\n")
+		sys.exit()
+
+	if len(sys.argv) > 2:
+		country = sys.argv[2].title()
+
+	if ".osm" in input_filename:
+		out_filename = input_filename.replace(".osm", "") + "_update.osm"
+	else:
+		out_filename = input_filename + "_update"
+
+	today_date = time.strftime("%Y-%m-%d", time.localtime())
+	log_filename = input_filename.replace(".osm", "") + "_update_log.txt"
+
+	# Execute
+
+	load_file(input_filename)
+	load_overpass()
+	merge(log_filename)
+	save_osm_file(out_filename)
+
+	message ("Done\n\n")
