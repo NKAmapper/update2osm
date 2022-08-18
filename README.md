@@ -2,7 +2,7 @@
 
 Loads objects from OSM and generates an OSM file with updated tags and objects based on given input file.
 
-Usage: <code>python update2osm.py <input_file.osm></code> [country name].
+Usage: <code>python update2osm.py <input_file.osm> [country name]</code>.
 
 * The input file must contain exactly one *ref:xx* tag (e.g. *ref:esso*) to uniqely identify each object in OSM.
 * All objects with *ref:xx* tags in Norway are loaded from OSM and updated according to the input file.
