@@ -16,17 +16,29 @@
 
 import json
 import sys
-import urllib.request, urllib.parse
+import urllib.request, urllib.parse, urllib.error
 import copy
 import time
+import math
 from xml.etree import ElementTree as ET
 
 
-version = "1.1.0"
+version = "1.2.2"
+
+endpoint = "https://overpass-api.de/api/interpreter"
+#endpoint = "https://overpass.private.coffee/api/interpreter"
 
 header = {"User-Agent": "osm-no/update2osm"}
 
 country = "Norge"  # Used in Overpass query; must match country relation name in OSM ("Norge", "Sverige")
+
+report_distance = False  # Do not check distance between objects in OSM and input file
+
+distance_warning = 500  # Minimum distance for warning (meters)
+
+check_duplicate = True
+
+mark_not_found = True
 
 
 
@@ -37,6 +49,19 @@ def message (line):
 
 	sys.stdout.write (line)
 	sys.stdout.flush()
+
+
+
+def distance (point1, point2):
+	'''
+	Compute approximation of distance between two coordinates, (lon,lat), in meters.
+	Works for short distances.
+	'''
+
+	lon1, lat1, lon2, lat2 = map(math.radians, [point1[0], point1[1], point2[0], point2[1]])
+	x = (lon2 - lon1) * math.cos( 0.5*(lat2+lat1) )
+	y = lat2 - lat1
+	return 6371000.0 * math.sqrt( x*x + y*y )  # Metres
 
 
 
@@ -69,9 +94,9 @@ def load_file(input_filename):
 			key = tag.get('k')
 			entry['tags'][key] = tag.get('v')
 
-			if key[0:4] == "ref:":
+			if key[0:4] == "ref:" or key == "no-barnehage:nsrid":
 				if ref_key and (ref_key != key):
-					message ("More than one ref: key found - '%s' and '%s'" % (ref_key, key))
+					message ("More than one ref: key found - '%s' and '%s'\n\n" % (ref_key, key))
 					sys.exit()
 				ref_key = key
 				ref_input_count += 1
@@ -108,9 +133,12 @@ def load_overpass():
 	# Get all existing object from Overpass
 
 	message ("Loading from Overpass for %s ...\n" % country)
-	query = '[out:json][timeout:60];(area[admin_level=2][name=%s];)->.a;(nwr["%s"](area.a););(._;<;);(._;>;);out meta;' % (country, ref_key)
-	request = urllib.request.Request('https://overpass-api.de/api/interpreter?data=' + urllib.parse.quote(query), headers=header)
-	file = urllib.request.urlopen(request)
+	query = '[out:json][timeout:200];(area[admin_level=2][name=%s];)->.a;(nwr["%s"](area.a););(._;<;);(._;>;);out center meta;' % (country, ref_key)
+	request = urllib.request.Request(endpoint + "?data=" + urllib.parse.quote(query), headers=header)
+	try:
+		file = urllib.request.urlopen(request)
+	except urllib.error.HTTPError as err:
+		sys.exit("\t%s\n\n" % err)
 	osm_data = json.load(file)
 	file.close()
 
@@ -143,6 +171,8 @@ def merge(log_filename):
 	updated = 0
 	added = 0
 	not_found = 0
+	relocated = 0
+	duplicate = 0
 
 	node_id = -1000
 
@@ -157,14 +187,46 @@ def merge(log_filename):
 			log_file.write ("\n%s=%s\n" % (ref_key, input_element['tags'][ref_key]))
 
 			for osm_element in osm_data['elements']:
-				if ("tags" in osm_element) and (ref_key in osm_element['tags']) and (osm_element['tags'][ref_key] == input_element['tags'][ref_key]):
+				if ("tags" in osm_element) and (ref_key in osm_element['tags']) and \
+						(set(osm_element['tags'][ref_key].split(";")) & set(input_element['tags'][ref_key].split(";"))):
+#						(osm_element['tags'][ref_key] == input_element['tags'][ref_key]):
+
+					# Check for duplicates after first match
+
+					if check_duplicate and "match" in input_element and ref_key != "ref:toll":
+						osm_element['tags']["DUPLICATE"] = "yes"
+						osm_element['modify'] = True
+						log_file.write ("  Duplicate\n")
+						duplicate +=1
+						continue
+
+					# Check if element may have been relocated
+
+					new_tags = copy.deepcopy(osm_element['tags'])
+
+					if "center" in osm_element:
+						osm_center = (osm_element['center']['lon'], osm_element['center']['lat'])
+					else:
+						osm_center = (osm_element['lon'], osm_element['lat'])
+
+					if (report_distance
+							and input_element['lon'] != 0 and input_element['lat'] != 0
+							and ("GEORESULT" not in input_element['tags'] 
+								or input_element['tags']['GEORESULT'] == "house")):  # Only consider best quality geocoding
+
+						dist = distance(osm_center, (input_element['lon'], input_element['lat']))
+						if dist > distance_warning:
+							new_tags['DISTANCE'] = str(int(dist))
+							if "ADDRESS" in input_element['tags']:
+								new_tags['ADDRESS'] = input_element['tags']['ADDRESS']  # For information
+							log_file.write ("  Distance %i m\n" % dist)
+							relocated += 1
 
 					if ref_key == "ref:toll":
 						log_file.write ("  Match with OSM id: %i\n" % osm_element['id'])
 
 					# Loop tags of existing osm element and replace keys/values, or delete if within tag scope of tags in input file
 
-					new_tags = copy.deepcopy(osm_element['tags'])
 					for key, value in osm_element['tags'].items():
 
 						colon = key.find(':')
@@ -211,13 +273,14 @@ def merge(log_filename):
 							log_file.write ("    Added:    %s='%s'\n" % (key, value))
 
 					osm_element['match'] = True
+					input_element['match'] = True
 					osm_element['tags'] = new_tags
 					if modified:
 						osm_element['modify'] = True
 						updated += 1
 					found = True
 
-					if ref_key != "ref:toll":  # Several occurances of ref:toll
+					if not check_duplicate and ref_key != "ref:toll":  # Several occurances of ref:toll
 						break
 
 		else:
@@ -240,21 +303,26 @@ def merge(log_filename):
 
 	# Tag elements in osm not found in input file
 
-	for osm_element in osm_data['elements']:
+	if mark_not_found:
+		for osm_element in osm_data['elements']:
 
-		if ("tags" in osm_element) and (ref_key in osm_element['tags']) and not("match" in osm_element) and not("modify" in osm_element):
-			osm_element['tags']['NOT_FOUND'] = "yes"
-			osm_element['modify'] = True
-			not_found += 1
-			log_file.write ("\nOBJECT IN OSM NOT FOUND IN INPUT FILE:\n")
-			for key, value in osm_element['tags'].items():
-				log_file.write ("    %s='%s'\n" % (key, value))
+			if ("tags" in osm_element) and (ref_key in osm_element['tags']) and not("match" in osm_element) and not("modify" in osm_element):
+				osm_element['tags']['NOT_FOUND'] = "yes"
+				osm_element['modify'] = True
+				not_found += 1
+				log_file.write ("\nOBJECT IN OSM NOT FOUND IN INPUT FILE:\n")
+				for key, value in osm_element['tags'].items():
+					log_file.write ("    %s='%s'\n" % (key, value))
 
 	log_file.close()
 
-	message ("\tUpdated:  %i\n" % updated)
-	message ("\tAdded:    %i\n" % added)
-	message ("\tNo match: %i (objects in OSM with %s not found in input file)\n" % (not_found, ref_key))
+	message ("\tUpdated:   %i\n" % updated)
+	message ("\tAdded:     %i\n" % added)
+	message ("\tNo match:  %i (objects in OSM with %s not found in input file)\n" % (not_found, ref_key))
+	if report_distance:
+		message ("\tRelocated: %i (objects in OSM and input file are more than %i meters apart)\n" % (relocated, distance_warning))
+	if check_duplicate:
+		message ("\tDuplicate: %i\n" % duplicate)		
 	message ("\tDetails in log file '%s'\n" % log_filename)
 
 
@@ -350,16 +418,22 @@ if __name__ == '__main__':
 		message ("Input filename.osm missing\n")
 		sys.exit()
 
-	if len(sys.argv) > 2:
+	if len(sys.argv) > 2 and "-" not in sys.argv[2]:
 		country = sys.argv[2].title()
 
+	if "-distance" in sys.argv or "-distanse" in sys.argv:  # Report gap
+		report_distance = True
+
+	if "-notfound" in sys.argv:  # Do not report 'Not found'
+		mark_not_found = False
+
 	if ".osm" in input_filename:
-		out_filename = input_filename.replace(".osm", "") + "_update.osm"
+		out_filename = input_filename.split("/")[-1].replace(".osm", "") + "_update.osm"
 	else:
-		out_filename = input_filename + "_update"
+		out_filename = input_filename.split("/")[-1] + "_update"
 
 	today_date = time.strftime("%Y-%m-%d", time.localtime())
-	log_filename = input_filename.replace(".osm", "") + "_update_log.txt"
+	log_filename = out_filename.replace(".osm", "_log.txt")
 
 	# Execute
 
