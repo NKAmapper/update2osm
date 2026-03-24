@@ -2,7 +2,9 @@
 
 Loads objects from OSM and generates an OSM file with updated tags and objects based on given input file.
 
-Usage: <code>python update2osm.py <input_file.osm> [country name]</code>.
+Usage: <code>python update2osm.py <input_file.osm> [country name] [-distance]</code>.
+
+Option: <code>-distance</code>: Check distance between existing position in OSM and in file, in case the object has been relocated.
 
 * The input file must contain exactly one *ref:xx* tag (e.g. *ref:esso*) to uniqely identify each object in OSM.
 * All objects with *ref:xx* tags in Norway are loaded from OSM and updated according to the input file.
